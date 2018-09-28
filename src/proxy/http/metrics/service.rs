@@ -265,7 +265,9 @@ where
 
         if req.body().is_end_stream() {
             if let Some(lock) = req_metrics.take() {
+                let now = clock::now();
                 if let Ok(mut metrics) = lock.lock() {
+                    (*metrics).last_update = now;
                     (*metrics).total.incr();
                 }
             }
@@ -337,7 +339,9 @@ where
         let frame = try_ready!(self.inner.poll_data());
 
         if let Some(lock) = self.metrics.take() {
+            let now = clock::now();
             if let Ok(mut metrics) = lock.lock() {
+                (*metrics).last_update = now;
                 (*metrics).total.incr();
             }
         }
@@ -375,6 +379,7 @@ where
     C::Class: Hash + Eq,
 {
     fn record_class(&mut self, class: Option<C::Class>) {
+        let now = clock::now();
         let lock = match self.metrics.take() {
             Some(lock) => lock,
             None => return,
@@ -383,8 +388,9 @@ where
             Ok(m) => m,
             Err(_) => return,
         };
+        (*metrics).last_update = now;
 
-        let first_byte_at = self.first_byte_at.unwrap_or_else(|| clock::now());
+        let first_byte_at = self.first_byte_at.unwrap_or_else(|| now);
         let class_metrics = match class {
             Some(c) => metrics
                 .by_class
