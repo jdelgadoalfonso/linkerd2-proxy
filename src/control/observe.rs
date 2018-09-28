@@ -133,6 +133,7 @@ impl Stream for TapEvents {
                     }
 
                     if let Ok(te) = TapEvent::try_from(&ev) {
+                        debug!("emitting tap event: {:?}", te);
                         // TODO Do limit checks here.
                         return Ok(Some(te).into());
                     }
