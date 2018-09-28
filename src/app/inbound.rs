@@ -13,7 +13,7 @@ use Conditional;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Endpoint {
     pub addr: SocketAddr,
-    pub authority: Option<http::uri::Authority>,
+    pub authority: http::uri::Authority,
     pub settings: Settings,
     pub source_tls_status: tls::Status,
 }
@@ -44,10 +44,18 @@ impl<A> router::Recognize<http::Request<A>> for Recognize {
             .and_then(|s| s.orig_dst_if_not_local())
             .or(self.default_addr)?;
 
-        let authority = req.uri().authority_part().cloned();
+        let authority = req.uri().authority_part().cloned().or_else(|| {
+            let a = format!("{}", addr);
+            http::uri::Authority::from_shared(a.into()).ok()
+        })?;
         let settings = Settings::detect(req);
 
-        let ep = Endpoint { addr, authority, settings, source_tls_status };
+        let ep = Endpoint {
+            addr,
+            authority,
+            settings,
+            source_tls_status,
+        };
         debug!("recognize: src={:?} ep={:?}", src, ep);
         Some(ep)
     }
@@ -152,9 +160,14 @@ mod tests {
             is_h1_upgrade: false,
             was_absolute_form: false,
         };
-        let authority = None;
+        let authority = http::uri::Authority::from_shared(format!("{}", addr).into());
         let source_tls_status = TLS_DISABLED;
-        Endpoint { addr, authority, settings, source_tls_status }
+        Endpoint {
+            addr,
+            authority,
+            settings,
+            source_tls_status,
+        }
     }
 
     const TLS_DISABLED: Conditional<(), tls::ReasonForNoTls> =

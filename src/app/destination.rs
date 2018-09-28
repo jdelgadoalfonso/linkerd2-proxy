@@ -10,7 +10,6 @@ use transport::{DnsNameAndPort, Host, HostAndPort};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Destination {
-    pub authority: Option<http::uri::Authority>,
     pub name_or_addr: NameOrAddr,
     pub settings: Settings,
     _p: (),
@@ -26,23 +25,12 @@ pub enum NameOrAddr {
     Addr(SocketAddr),
 }
 
-impl fmt::Display for Destination {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.name_or_addr {
-            NameOrAddr::Name(ref name) => write!(f, "{}:{}", name.host, name.port),
-            NameOrAddr::Addr(ref addr) => addr.fmt(f),
-        }
-    }
-}
-
 impl Destination {
     pub fn new(
-        authority: Option<http::uri::Authority>,
         name_or_addr: NameOrAddr,
         settings: Settings
     ) -> Self {
         Self {
-            authority,
             name_or_addr,
             settings,
             _p: (),
@@ -50,10 +38,24 @@ impl Destination {
     }
 
     pub fn from_request<A>(req: &http::Request<A>) -> Option<Self> {
-        let authority = req.uri().authority_part().cloned();
         let name_or_addr = NameOrAddr::from_request(req)?;
-        let settings = Settings::detect(req);
-        Some(Self::new(authority, name_or_addr, settings))
+       let settings = Settings::detect(req);
+        Some(Self::new(name_or_addr, settings))
+    }
+}
+
+impl fmt::Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.name_or_addr.fmt(f)
+    }
+}
+
+impl fmt::Display for NameOrAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NameOrAddr::Name(ref name) => write!(f, "{}:{}", name.host, name.port),
+            NameOrAddr::Addr(ref addr) => addr.fmt(f),
+        }
     }
 }
 

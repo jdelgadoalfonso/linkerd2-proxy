@@ -1,13 +1,14 @@
+use http::uri;
 use std::{
     fmt::{self, Write},
     net,
 };
 
 use metrics::FmtLabels;
-use transport::tls;
+use transport::{tls, DnsNameAndPort};
 use Conditional;
 
-use super::{classify, inbound, outbound};
+use super::{classify, inbound, outbound, NameOrAddr};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EndpointLabels {
@@ -15,7 +16,7 @@ pub struct EndpointLabels {
     direction: Direction,
     tls_status: tls::Status,
     authority: Authority,
-    labels: String,
+    labels: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -25,19 +26,16 @@ enum Direction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Authority(String);
+struct Authority(Option<uri::Authority>);
 
 impl From<inbound::Endpoint> for EndpointLabels {
     fn from(ep: inbound::Endpoint) -> Self {
         Self {
             addr: ep.addr,
-            authority: Authority(match ep.authority {
-                Some(a) => format!("{}", a),
-                None => format!("{}", ep.addr),
-            }),
+            authority: Authority(Some(ep.authority)),
             direction: Direction::In,
             tls_status: ep.source_tls_status,
-            labels: "".to_owned(),
+            labels: None,
         }
     }
 }
@@ -50,17 +48,28 @@ impl From<outbound::Endpoint> for EndpointLabels {
             for (k, v) in label_iter {
                 write!(s, ",dst_{}=\"{}\"", k, v).expect("label concat must succeed");
             }
-            s
+            Some(s)
         } else {
-            "".to_owned()
+            None
+        };
+
+        let authority = {
+            let a = match ep.dst.name_or_addr {
+                NameOrAddr::Name(DnsNameAndPort { ref host, ref port }) => {
+                    if *port == 80 {
+                        format!("{}", host)
+                    } else {
+                        format!("{}:{}", host, port)
+                    }
+                }
+                NameOrAddr::Addr(addr) => format!("{}", addr),
+            };
+            Authority(uri::Authority::from_shared(a.into()).ok())
         };
 
         Self {
             addr: ep.connect.addr,
-            authority: Authority(match ep.dst.authority {
-                Some(a) => format!("{}", a),
-                None => format!("{}", ep.dst),
-            }),
+            authority,
             direction: Direction::Out,
             tls_status: ep.connect.tls_status(),
             labels,
@@ -72,8 +81,8 @@ impl FmtLabels for EndpointLabels {
     fn fmt_labels(&self, f: &mut fmt::Formatter) -> fmt::Result {
         (&self.authority, &self.direction).fmt_labels(f)?;
 
-        if !self.labels.is_empty() {
-            write!(f, ",{}", self.labels)?;
+        if let Some(labels) = self.labels.as_ref() {
+            write!(f, ",{}", labels)?;
         }
 
         write!(f, ",")?;
@@ -94,7 +103,10 @@ impl FmtLabels for Direction {
 
 impl FmtLabels for Authority {
     fn fmt_labels(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "authority=\"{}\"", self.0)
+        match self.0 {
+            Some(ref a) => write!(f, "authority=\"{}\"", a),
+            None => write!(f, "authority=\"\"")
+        }
     }
 }
 

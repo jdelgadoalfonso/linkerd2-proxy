@@ -6,6 +6,7 @@ pub use self::tower_service::{NewService, Service};
 pub use self::stack::{
     make_per_request,
     watch,
+    Either,
     Layer,
     Make,
     Shared,

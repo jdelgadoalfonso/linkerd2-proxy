@@ -1,9 +1,9 @@
 use futures::{Async, Poll};
 use futures_watch::Watch;
 use http;
+use std::fmt;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::fmt;
 
 use app::{Destination, NameOrAddr};
 use control::destination::{Metadata, ProtocolHint};
@@ -83,7 +83,6 @@ impl Recognize {
     pub fn new() -> Self {
         Self {}
     }
-
 }
 
 impl<R> Resolve<R>
@@ -120,8 +119,7 @@ where
     fn poll(&mut self) -> Poll<resolve::Update<Self::Endpoint>, Self::Error> {
         match self {
             Resolution::Name(ref dst, ref mut res) => match try_ready!(res.poll()) {
-                resolve::Update::Remove(addr) =>
-                    Ok(Async::Ready(resolve::Update::Remove(addr))),
+                resolve::Update::Remove(addr) => Ok(Async::Ready(resolve::Update::Remove(addr))),
                 resolve::Update::Make(addr, metadata) => {
                     // If the endpoint does not have TLS, note the reason.
                     // Otherwise, indicate that we don't (yet) have a TLS
@@ -139,7 +137,7 @@ where
                     };
                     Ok(Async::Ready(resolve::Update::Make(addr, ep)))
                 }
-            }
+            },
             Resolution::Addr(ref dst, ref mut addr) => match addr.take() {
                 Some(addr) => {
                     let tls = tls::ReasonForNoIdentity::NoAuthorityInHttpRequest;
@@ -174,9 +172,7 @@ where
     type Make = MakeUpgrade<M>;
 
     fn bind(&self, inner: M) -> Self::Make {
-        MakeUpgrade {
-            inner,
-        }
+        MakeUpgrade { inner }
     }
 }
 
@@ -185,30 +181,34 @@ where
     M: svc::Make<Endpoint>,
     M::Value: svc::Service<Request = http::Request<A>, Response = http::Response<B>>,
 {
-    type Value = orig_proto::Upgrade<M::Value>;
+    type Value = svc::Either<orig_proto::Upgrade<M::Value>, M::Value>;
     type Error = M::Error;
 
     fn make(&self, endpoint: &Endpoint) -> Result<Self::Value, Self::Error> {
-        let mut endpoint = endpoint.clone();
-        endpoint.dst.settings = Settings::Http2;
-
-        let inner = self.inner.make(&endpoint)?;
-        Ok(inner.into())
-    }
-}
-
-impl Endpoint {
-    pub fn can_use_orig_proto(&self) -> bool {
-        match self.metadata.protocol_hint() {
-            ProtocolHint::Unknown => false,
-            ProtocolHint::Http2 => true,
+        if endpoint.can_use_orig_proto()
+                && !endpoint.dst.settings.is_http2()
+                && !endpoint.dst.settings.is_h1_upgrade() {
+            let mut upgraded = endpoint.clone();
+            upgraded.dst.settings = Settings::Http2;
+            self.inner.make(&upgraded).map(|i| svc::Either::A(i.into()))
+        } else {
+            self.inner.make(&endpoint).map(svc::Either::B)
         }
     }
 }
 
+impl Endpoint {
+pub fn can_use_orig_proto(&self) -> bool {
+    match self.metadata.protocol_hint() {
+        ProtocolHint::Unknown => false,
+        ProtocolHint::Http2 => true,
+    }
+}
+}
+
 impl fmt::Display for Endpoint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.connect.addr.fmt(f)
+fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    self.connect.addr.fmt(f)
     }
 }
 
@@ -261,7 +261,7 @@ where
     fn bind(&self, inner: M) -> Self::Make {
         MakeTlsConfig {
             inner,
-            watch: self.watch.clone()
+            watch: self.watch.clone(),
         }
     }
 }
@@ -289,16 +289,15 @@ where
     type Value = M::Value;
     type Error = M::Error;
 
-    fn make(&self, client_config: &tls::ConditionalClientConfig)
-        -> Result<Self::Value, Self::Error>
-    {
+    fn make(
+        &self,
+        client_config: &tls::ConditionalClientConfig,
+    ) -> Result<Self::Value, Self::Error> {
         let mut endpoint = self.endpoint.clone();
         endpoint.connect.tls = endpoint.metadata.tls_identity().and_then(|identity| {
-            client_config.as_ref().map(|config| {
-                tls::ConnectionConfig {
-                    server_identity: identity.clone(),
-                    config: config.clone(),
-                }
+            client_config.as_ref().map(|config| tls::ConnectionConfig {
+                server_identity: identity.clone(),
+                config: config.clone(),
             })
         });
 

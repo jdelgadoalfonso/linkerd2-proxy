@@ -236,7 +236,7 @@ where
 
             // As HTTP requests are accepted, we add some request extensions
             // including metadata about the request's origin.
-            let source_stack =
+            let source_layer =
                 timestamp_request_open::Layer::new().and_then(insert_target::Layer::new());
 
             // `normalize_uri` and `make_per_request` are applied on the stack
@@ -249,19 +249,12 @@ where
             // settings. Stack layers above this operate on an `Endpoint` with
             // the TLS client config is marked as `NoConfig` when the endpoint
             // has a TLS identity.
-            let router_stack = router::Layer::new(outbound::Recognize::new())
+            let router_layer = router::Layer::new(outbound::Recognize::new())
                 .and_then(limit::Layer::new(MAX_IN_FLIGHT))
                 .and_then(timeout::Layer::new(config.bind_timeout))
                 .and_then(buffer::Layer::new())
                 .and_then(balance::Layer::new(outbound::Resolve::new(resolver)))
-                .and_when(
-                    |ep: &outbound::Endpoint| {
-                        ep.can_use_orig_proto()
-                            && !ep.dst.settings.is_http2()
-                            && !ep.dst.settings.is_h1_upgrade()
-                    },
-                    outbound::orig_proto_upgrade(),
-                )
+                .and_then(outbound::orig_proto_upgrade())
                 .and_then(outbound::LayerTlsConfig::new(tls_client_config))
                 .and_then(proxy::http::metrics::Layer::new(
                     http_metrics.clone(),
@@ -283,7 +276,7 @@ where
 
             let capacity = config.outbound_router_capacity;
             let max_idle_age = config.outbound_router_max_idle_age;
-            let router = router_stack
+            let router = router_layer
                 .bind(client::Make::new("out", connect.clone()))
                 .make(&router::Config::new("out", capacity, max_idle_age))
                 .expect("outbound router");
@@ -293,7 +286,7 @@ where
                 outbound_listener,
                 accept,
                 connect,
-                source_stack.bind(svc::Shared::new(router)),
+                source_layer.bind(svc::Shared::new(router)),
                 config.outbound_ports_disable_protocol_detection,
                 get_original_dst.clone(),
                 drain_rx.clone(),
@@ -319,7 +312,7 @@ where
             // Furthermore, HTTP/2 requests may be downgraded to HTTP/1.1 per
             // `orig-proto` headers. This happens in the source stack so that
             // the router need not detect whether a request _will be_ downgraded.
-            let source_stack = timestamp_request_open::Layer::new()
+            let source_layer = timestamp_request_open::Layer::new()
                 .and_then(insert_target::Layer::new())
                 .and_then(inbound::orig_proto_downgrade());
 
@@ -333,7 +326,7 @@ where
             // selectively. For HTTP/2 stacks, for instance, neither service will be
             // employed.
             let default_fwd_addr = config.inbound_forward.map(|a| a.into());
-            let router_stack = router::Layer::new(inbound::Recognize::new(default_fwd_addr))
+            let router_layer = router::Layer::new(inbound::Recognize::new(default_fwd_addr))
                 .and_then(limit::Layer::new(MAX_IN_FLIGHT))
                 .and_then(buffer::Layer::new())
                 .and_then(proxy::http::metrics::Layer::new(
@@ -357,7 +350,7 @@ where
             // Build a router using the above policy
             let capacity = config.inbound_router_capacity;
             let max_idle_age = config.inbound_router_max_idle_age;
-            let router = router_stack
+            let router = router_layer
                 .bind(client::Make::new("in", connect.clone()))
                 .make(&router::Config::new("in", capacity, max_idle_age))
                 .expect("inbound router");
@@ -367,7 +360,7 @@ where
                 inbound_listener,
                 accept,
                 connect,
-                source_stack.bind(svc::Shared::new(router)),
+                source_layer.bind(svc::Shared::new(router)),
                 config.inbound_ports_disable_protocol_detection,
                 get_original_dst.clone(),
                 drain_rx.clone(),
