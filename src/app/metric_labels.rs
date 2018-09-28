@@ -1,4 +1,3 @@
-use http;
 use std::{
     fmt::{self, Write},
     net,
@@ -26,13 +25,16 @@ enum Direction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Authority(Option<http::uri::Authority>);
+struct Authority(String);
 
 impl From<inbound::Endpoint> for EndpointLabels {
     fn from(ep: inbound::Endpoint) -> Self {
         Self {
             addr: ep.addr,
-            authority: Authority(ep.authority),
+            authority: Authority(match ep.authority {
+                Some(a) => format!("{}", a),
+                None => format!("{}", ep.addr),
+            }),
             direction: Direction::In,
             tls_status: ep.source_tls_status,
             labels: "".to_owned(),
@@ -55,7 +57,10 @@ impl From<outbound::Endpoint> for EndpointLabels {
 
         Self {
             addr: ep.connect.addr,
-            authority: Authority(ep.dst.authority),
+            authority: Authority(match ep.dst.authority {
+                Some(a) => format!("{}", a),
+                None => format!("{}", ep.dst),
+            }),
             direction: Direction::Out,
             tls_status: ep.connect.tls_status(),
             labels,
@@ -89,10 +94,7 @@ impl FmtLabels for Direction {
 
 impl FmtLabels for Authority {
     fn fmt_labels(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.0 {
-            Some(ref a) => write!(f, "authority=\"{}\"", a),
-            None => f.pad("authority=\"\""),
-        }
+        write!(f, "authority=\"{}\"", self.0)
     }
 }
 
