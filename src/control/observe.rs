@@ -104,11 +104,13 @@ impl Stream for TapEvents {
             let poll: Poll<Option<Event>, Self::Error> =
                 self.rx.poll().or_else(|_| Ok(None.into()));
 
+            debug!("polling; current={}; remaining={}", self.current.len(), self.remaining);
             match try_ready!(poll) {
                 Some(ev) => {
                     match ev {
                         Event::StreamRequestOpen(ref req) => {
                             if self.remaining == 0 {
+                                debug!("exhausted; ignoring req={}", req.id);
                                 continue;
                             }
                             debug!("insert req={}", req.id);
