@@ -116,7 +116,7 @@ impl FmtLabels for classify::Class {
         match self {
             Class::Grpc(result, status) => write!(
                 f,
-                "classification=\"{}\",status_code=\"200\",grpc_status={}",
+                "classification=\"{}\",status_code=\"200\",grpc_status=\"{}\"",
                 result, status
             ),
             Class::Http(result, status) => write!(
