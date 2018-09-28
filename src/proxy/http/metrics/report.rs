@@ -46,13 +46,19 @@ where
     C: FmtLabels + Hash + Eq,
 {
     fn fmt_metrics(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug!("fmt_metrics");
         let mut registry = match self.registry.lock() {
             Err(_) => return Ok(()),
             Ok(r) => r,
         };
-        registry.retain_since(clock::now() - self.retain_idle);
+
+        let now = clock::now();
+        let since = now - self.retain_idle;
+        debug!("fmt_metrics: retain_since: now={:?} since={:?}", now, since);
+        registry.retain_since(since);
 
         let registry = registry;
+        debug!("fmt_metrics: by_target={}", registry.by_target.len());
         if registry.by_target.is_empty() {
             return Ok(());
         }
@@ -62,13 +68,13 @@ where
 
         response_total.fmt_help(f)?;
         registry.fmt_by_class(f, response_total, |s| &s.total)?;
-        registry.fmt_by_target(f, response_total, |s| &s.unclassified.total)?;
+        //registry.fmt_by_target(f, response_total, |s| &s.unclassified.total)?;
 
         response_latency_ms.fmt_help(f)?;
         registry.fmt_by_class(f, response_latency_ms, |s| &s.latency)?;
-        registry.fmt_by_target(f, response_latency_ms, |s| {
-            &s.unclassified.latency
-        })?;
+        // registry.fmt_by_target(f, response_latency_ms, |s| {
+        //     &s.unclassified.latency
+        // })?;
 
         Ok(())
     }

@@ -17,7 +17,7 @@ use svc;
 #[derive(Debug)]
 pub struct Layer<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service,
@@ -33,7 +33,7 @@ where
 #[derive(Debug)]
 pub struct Make<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service,
@@ -100,7 +100,7 @@ where
 
 impl<T, M, K, C, A, B> Layer<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service<
@@ -124,7 +124,7 @@ where
 
 impl<T, M, K, C, A, B> Clone for Layer<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service<
@@ -144,7 +144,7 @@ where
 
 impl<T, M, K, C, A, B> svc::Layer<T, T, M> for Layer<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service<
@@ -175,7 +175,7 @@ where
 
 impl<T, M, K, C, A, B> Clone for Make<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T> + Clone,
     M::Value: svc::Service<
@@ -201,7 +201,7 @@ where
 
 impl<T, M, K, C, A, B> svc::Make<T> for Make<T, M, K, C>
 where
-    T: Clone,
+    T: Clone + Debug,
     K: Clone + Hash + Eq + From<T>,
     M: svc::Make<T>,
     M::Value: svc::Service<
@@ -218,6 +218,7 @@ where
     type Error = M::Error;
 
     fn make(&self, target: &T) -> Result<Self::Value, Self::Error> {
+        debug!("make: target={:?}", target);
         let inner = self.inner.make(target)?;
 
         let classify = self.classify.clone();
@@ -231,6 +232,7 @@ where
             Err(_) => None,
         };
 
+        debug!("make: metrics={}", metrics.is_some());
         Ok(Service { classify, metrics, inner })
     }
 }
