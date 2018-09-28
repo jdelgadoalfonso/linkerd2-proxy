@@ -9,5 +9,4 @@ pub use self::stack::{
     Layer,
     Make,
     Shared,
-    When,
 };

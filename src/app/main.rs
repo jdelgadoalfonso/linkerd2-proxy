@@ -20,7 +20,9 @@ use logging;
 use metrics;
 use proxy::{
     self, buffer,
-    http::{balance, client, insert_target, metrics::timestamp_request_open, normalize_uri, router},
+    http::{
+        balance, client, insert_target, metrics::timestamp_request_open, normalize_uri, router,
+    },
     limit, timeout,
 };
 use svc::{self, Layer as _Layer, Make as _Make};
@@ -172,8 +174,10 @@ where
         );
 
         let (taps, observe) = control::Observe::new(100);
-        let (http_metrics, http_report) =
-            proxy::http::metrics::new::<EndpointLabels, classify::Class>(config.metrics_retain_idle);
+        let (http_metrics, http_report) = proxy::http::metrics::new::<
+            EndpointLabels,
+            classify::Class,
+        >(config.metrics_retain_idle);
         let (transport_metrics, transport_report) = transport::metrics::new();
 
         let (tls_config_sensor, tls_config_report) = telemetry::tls_config_reload::new();
@@ -235,61 +239,51 @@ where
             let source_stack =
                 timestamp_request_open::Layer::new().and_then(insert_target::Layer::new());
 
-            // A stack configured by `router::Config`, responsible for building
-            // a router made of route stacks configured by `outbound::Destination`.
-            let router_stack = router::Layer::new(outbound::Recognize::new());
-
-            let dst_stack = limit::Layer::new(MAX_IN_FLIGHT)
-                .and_then(timeout::Layer::new(config.bind_timeout))
-                .and_then(buffer::Layer::new())
-                .and_then(balance::Layer::new(outbound::Resolve::new(resolver)));
-
-            let upgrade_from_orig_proto = svc::When::new(
-                |ep: &outbound::Endpoint| {
-                    ep.can_use_orig_proto()
-                        && !ep.dst.settings.is_http2()
-                        && !ep.dst.settings.is_h1_upgrade()
-                },
-                outbound::orig_proto_upgrade(),
-            );
-
             // `normalize_uri` and `make_per_request` are applied on the stack
             // selectively. For HTTP/2 stacks, for instance, neither service will be
             // employed.
-            let endpoint_h1_stack = svc::When::new(
-                |ep: &outbound::Endpoint| {
-                    !ep.dst.settings.is_http2() && !ep.dst.settings.was_absolute_form()
-                },
-                normalize_uri::Layer::new(),
-            ).and_then(svc::When::new(
-                |ep: &outbound::Endpoint| {
-                    !ep.dst.settings.is_http2() && !ep.dst.settings.can_reuse_clients()
-                },
-                svc::make_per_request::Layer::new(),
-            ));
-
+            //
             // The TLS status of outbound requests depends on the local
             // configuration. As the local configuration changes, the inner
             // stack (including a Client) is rebuilt with the appropriate
             // settings. Stack layers above this operate on an `Endpoint` with
             // the TLS client config is marked as `NoConfig` when the endpoint
             // has a TLS identity.
-            let endpoint_inner_stack =
-                outbound::LayerTlsConfig::new(tls_client_config)
-                    .and_then(proxy::http::metrics::Layer::new(
-                        http_metrics.clone(),
-                        classify::Classify,
-                    ))
-                    .and_then(tap::Layer::new(taps.clone()))
-                    ;
+            let router_stack = router::Layer::new(outbound::Recognize::new())
+                .and_then(limit::Layer::new(MAX_IN_FLIGHT))
+                .and_then(timeout::Layer::new(config.bind_timeout))
+                .and_then(buffer::Layer::new())
+                .and_then(balance::Layer::new(outbound::Resolve::new(resolver)))
+                .and_when(
+                    |ep: &outbound::Endpoint| {
+                        ep.can_use_orig_proto()
+                            && !ep.dst.settings.is_http2()
+                            && !ep.dst.settings.is_h1_upgrade()
+                    },
+                    outbound::orig_proto_upgrade(),
+                )
+                .and_then(outbound::LayerTlsConfig::new(tls_client_config))
+                .and_then(proxy::http::metrics::Layer::new(
+                    http_metrics.clone(),
+                    classify::Classify,
+                ))
+                .and_then(tap::Layer::new(taps.clone()))
+                .and_when(
+                    |ep: &outbound::Endpoint| {
+                        !ep.dst.settings.is_http2() && !ep.dst.settings.was_absolute_form()
+                    },
+                    normalize_uri::Layer::new(),
+                )
+                .and_when(
+                    |ep: &outbound::Endpoint| {
+                        !ep.dst.settings.is_http2() && !ep.dst.settings.can_reuse_clients()
+                    },
+                    svc::make_per_request::Layer::new(),
+                );
 
             let capacity = config.outbound_router_capacity;
             let max_idle_age = config.outbound_router_max_idle_age;
             let router = router_stack
-                .and_then(dst_stack)
-                .and_then(upgrade_from_orig_proto)
-                .and_then(endpoint_h1_stack)
-                .and_then(endpoint_inner_stack)
                 .bind(client::Make::new("out", connect.clone()))
                 .make(&router::Config::new("out", capacity, max_idle_age))
                 .expect("outbound router");
@@ -334,34 +328,36 @@ where
             //
             // If there is no `SO_ORIGINAL_DST` for an inbound socket,
             // `default_fwd_addr` may be used.
+            //
+            // `normalize_uri` and `make_per_request` are applied on the stack
+            // selectively. For HTTP/2 stacks, for instance, neither service will be
+            // employed.
             let default_fwd_addr = config.inbound_forward.map(|a| a.into());
             let router_stack = router::Layer::new(inbound::Recognize::new(default_fwd_addr))
                 .and_then(limit::Layer::new(MAX_IN_FLIGHT))
                 .and_then(buffer::Layer::new())
-                .and_then(proxy::http::metrics::Layer::new(http_metrics, classify::Classify))
+                .and_then(proxy::http::metrics::Layer::new(
+                    http_metrics,
+                    classify::Classify,
+                ))
                 .and_then(tap::Layer::new(taps))
-                ;
-
-            // `normalize_uri` and `make_per_request` are applied on the stack
-            // selectively. For HTTP/2 stacks, for instance, neither service will be
-            // employed.
-            let endpoint_h1_stack = svc::When::new(
-                |ep: &inbound::Endpoint| {
-                    !ep.settings.is_http2() && !ep.settings.was_absolute_form()
-                },
-                normalize_uri::Layer::new(),
-            ).and_then(svc::When::new(
-                |ep: &inbound::Endpoint| {
-                    !ep.settings.is_http2() && !ep.settings.can_reuse_clients()
-                },
-                svc::make_per_request::Layer::new(),
-            ));
+                .and_when(
+                    |ep: &inbound::Endpoint| {
+                        !ep.settings.is_http2() && !ep.settings.was_absolute_form()
+                    },
+                    normalize_uri::Layer::new(),
+                )
+                .and_when(
+                    |ep: &inbound::Endpoint| {
+                        !ep.settings.is_http2() && !ep.settings.can_reuse_clients()
+                    },
+                    svc::make_per_request::Layer::new(),
+                );
 
             // Build a router using the above policy
             let capacity = config.inbound_router_capacity;
             let max_idle_age = config.inbound_router_max_idle_age;
             let router = router_stack
-                .and_then(endpoint_h1_stack)
                 .bind(client::Make::new("in", connect.clone()))
                 .make(&router::Config::new("in", capacity, max_idle_age))
                 .expect("inbound router");

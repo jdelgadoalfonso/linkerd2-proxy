@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use super::when;
+
 /// A stackable element.
 ///
 /// Given a `Next`-typed inner value, produces a `Make`-typed value.
@@ -23,6 +25,21 @@ pub trait Layer<Target, NextTarget, Next: super::Make<NextTarget>> {
         AndThen {
             outer: self,
             inner,
+            _p: PhantomData,
+        }
+    }
+
+    fn and_when<P, N, L>(self, predicate: P, inner: L)
+        -> AndThen<Target, NextTarget, NextTarget, N, Self, when::Layer<NextTarget, P, N, L>>
+    where
+        P: when::Predicate<NextTarget> + Clone,
+        N: super::Make<NextTarget> + Clone,
+        L: Layer<NextTarget, NextTarget, N, Error = N::Error> + Clone,
+        Self: Layer<Target, NextTarget, when::Make<NextTarget, P, N, L>> + Sized,
+    {
+        AndThen {
+            outer: self,
+            inner: when::Layer::new(predicate, inner),
             _p: PhantomData,
         }
     }
