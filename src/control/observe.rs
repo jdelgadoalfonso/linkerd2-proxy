@@ -97,6 +97,7 @@ impl Stream for TapEvents {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         loop {
             if self.remaining == 0 && self.current.is_empty() {
+                debug!("tap completed");
                 return Ok(None.into());
             }
 
@@ -110,26 +111,34 @@ impl Stream for TapEvents {
                             if self.remaining == 0 {
                                 continue;
                             }
+                            debug!("insert req={}", req.id);
                             self.remaining -= 1;
                             let _ = self.current.insert(req.id, req.clone());
                         }
                         Event::StreamRequestFail(ref req, _) => {
+                            debug!("remove req={}", req.id);
                             if self.current.remove(&req.id).is_none() {
+                                warn!("did not exist req={}", req.id);
                                 continue;
                             }
                         }
                         Event::StreamResponseOpen(ref rsp, _) => {
                             if !self.current.contains_key(&rsp.request.id) {
+                                warn!("did not exist req={}", rsp.request.id);
                                 continue;
                             }
                         }
                         Event::StreamResponseFail(ref rsp, _) |
                         Event::StreamResponseEnd(ref rsp, _) => {
                             if self.current.remove(&rsp.request.id).is_none() {
+                                warn!("did not exist req={}", rsp.request.id);
                                 continue;
                             }
                         }
-                        _ => continue,
+                        ev => {
+                            trace!("ignoring event: {:?}", ev);
+                            continue
+                        }
                     }
 
                     if let Ok(te) = TapEvent::try_from(&ev) {
