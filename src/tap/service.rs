@@ -3,19 +3,19 @@ use futures::{Async, Future, Poll};
 use h2;
 use http;
 use std::marker::PhantomData;
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio_timer::clock;
 use tower_h2::Body;
 
-use super::{event, Taps};
+use super::{event, NextId, Taps};
 use proxy::{self, http::client::Error};
 use svc;
 
 /// A stack module that wraps services to record taps.
 #[derive(Clone, Debug)]
 pub struct Layer<T, M> {
-    next_id: Arc<AtomicUsize>,
+    next_id: NextId,
     taps: Arc<Mutex<Taps>>,
     _p: PhantomData<fn() -> (T, M)>,
 }
@@ -26,7 +26,7 @@ pub struct Make<T, N>
 where
     N: svc::Make<T>,
 {
-    next_id: Arc<AtomicUsize>,
+    next_id: NextId,
     taps: Arc<Mutex<Taps>>,
     inner: N,
     _p: PhantomData<fn() -> (T)>,
@@ -39,7 +39,7 @@ where
     S: svc::Service,
 {
     endpoint: event::Endpoint,
-    next_id: Arc<AtomicUsize>,
+    next_id: NextId,
     taps: Arc<Mutex<Taps>>,
     inner: S,
 }
@@ -98,9 +98,9 @@ where
     A: Body,
     B: Body,
 {
-    pub fn new(taps: Arc<Mutex<Taps>>) -> Self {
+    pub fn new(next_id: NextId, taps: Arc<Mutex<Taps>>) -> Self {
         Self {
-            next_id: Arc::new(AtomicUsize::new(0)),
+            next_id,
             taps,
             _p: PhantomData,
         }
@@ -189,7 +189,7 @@ where
             .extensions()
             .get::<proxy::Source>()
             .map(|source| event::Request {
-                id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                id: self.next_id.next_id(),
                 endpoint: self.endpoint.clone(),
                 source: source.clone(),
                 method: req.method().clone(),

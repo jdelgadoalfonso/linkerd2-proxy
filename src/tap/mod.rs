@@ -1,5 +1,6 @@
 use futures_mpsc_lossy;
 use indexmap::IndexMap;
+use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
 
 use api::tap::observe_request;
 
@@ -11,6 +12,9 @@ pub use self::event::{Direction, Endpoint, Event};
 pub use self::match_::InvalidMatch;
 use self::match_::*;
 pub use self::service::{Layer, Make, RequestBody, Service};
+
+#[derive(Clone, Debug, Default)]
+pub struct NextId(Arc<AtomicUsize>);
 
 #[derive(Default, Debug)]
 pub struct Taps {
@@ -97,5 +101,11 @@ impl Tap {
         }
 
         Ok(false)
+    }
+}
+
+impl NextId {
+    fn next_id(&self) -> usize {
+        self.0.fetch_add(1, Ordering::Relaxed)
     }
 }

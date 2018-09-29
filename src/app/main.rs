@@ -173,6 +173,7 @@ where
             config.outbound_ports_disable_protocol_detection,
         );
 
+        let tap_next_id = tap::NextId::default();
         let (taps, observe) = control::Observe::new(100);
         let (http_metrics, http_report) = proxy::http::metrics::new::<
             EndpointLabels,
@@ -260,7 +261,7 @@ where
                     http_metrics.clone(),
                     classify::Classify,
                 ))
-                .and_then(tap::Layer::new(taps.clone()))
+                .and_then(tap::Layer::new(tap_next_id.clone(), taps.clone()))
                 .and_when(
                     |ep: &outbound::Endpoint| {
                         !ep.dst.settings.is_http2() && !ep.dst.settings.was_absolute_form()
@@ -333,7 +334,7 @@ where
                     http_metrics,
                     classify::Classify,
                 ))
-                .and_then(tap::Layer::new(taps))
+                .and_then(tap::Layer::new(tap_next_id, taps))
                 .and_when(
                     |ep: &inbound::Endpoint| {
                         !ep.settings.is_http2() && !ep.settings.was_absolute_form()
