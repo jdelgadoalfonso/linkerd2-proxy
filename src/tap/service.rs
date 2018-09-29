@@ -49,21 +49,18 @@ pub struct ResponseFuture<S>
 where
     S: svc::Service,
 {
-    handle: Option<Handle<event::Request>>,
     inner: S::Future,
-}
-
-#[derive(Debug, Clone)]
-struct Handle<M> {
-    meta: M,
+    meta: Option<event::Request>,
     taps: Option<Arc<Mutex<Taps>>>,
     request_open_at: Instant,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RequestBody<B> {
     inner: B,
-    handle: Option<Handle<event::Request>>,
+    meta: Option<event::Request>,
+    taps: Option<Arc<Mutex<Taps>>>,
+    request_open_at: Instant,
     byte_count: usize,
     frame_count: usize,
 }
@@ -71,7 +68,9 @@ pub struct RequestBody<B> {
 #[derive(Debug)]
 pub struct ResponseBody<B> {
     inner: B,
-    handle: Option<Handle<event::Response>>,
+    meta: Option<event::Response>,
+    taps: Option<Arc<Mutex<Taps>>>,
+    request_open_at: Instant,
     response_open_at: Instant,
     response_first_frame_at: Option<Instant>,
     byte_count: usize,
@@ -179,6 +178,7 @@ where
     fn call(&mut self, req: Self::Request) -> Self::Future {
         let request_open_at = clock::now();
 
+        // Only tap a request iff a `Source` is known.
         let meta = req
             .extensions()
             .get::<proxy::Source>()
@@ -190,38 +190,27 @@ where
                 uri: req.uri().clone(),
             });
 
-        if let Some(meta) = meta.as_ref() {
-            if let Ok(mut taps) = self.taps.lock() {
-                taps.inspect(&event::Event::StreamRequestOpen(meta.clone()));
-            }
+        let (head, inner) = req.into_parts();
+        let mut body = RequestBody {
+            inner,
+            meta: meta.clone(),
+            taps: Some(self.taps.clone()),
+            request_open_at,
+            byte_count: 0,
+            frame_count: 0,
+        };
+
+        body.tap_open();
+        if body.is_end_stream() {
+            body.tap_eos(Some(&head.headers));
         }
 
-        let handle = meta.clone().map(|meta| Handle {
+        let req = http::Request::from_parts(head, body);
+        ResponseFuture {
+            inner: self.inner.call(req),
             meta,
             taps: Some(self.taps.clone()),
             request_open_at,
-        });
-
-        let req = {
-            let handle = handle.clone();
-            let (head, inner) = req.into_parts();
-            let mut body = RequestBody {
-                inner,
-                handle,
-                byte_count: 0,
-                frame_count: 0,
-            };
-
-            if body.is_end_stream() {
-                body.tap_eos(Some(&head.headers));
-            }
-
-            http::Request::from_parts(head, body)
-        };
-
-        ResponseFuture {
-            inner: self.inner.call(req),
-            handle,
         }
     }
 }
@@ -235,61 +224,68 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let rsp = match self.inner.poll() {
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Ok(Async::Ready(rsp)) => rsp,
-            Err(e) => {
-                if let Some(mut h) = self.handle.take() {
-                    h.tap_err(e.reason());
-                }
-                return Err(e);
-            }
-        };
+        let rsp = try_ready!(self.inner.poll().map_err(|e| self.tap_err(e)));
         let response_open_at = clock::now();
 
-        let handle = self.handle.take().map(|h| Handle {
-            meta: event::Response {
-                request: h.meta.clone(),
-                status: rsp.status(),
-            },
-            taps: h.taps.clone(),
-            request_open_at: h.request_open_at,
+        let meta = self.meta.take().map(|request| event::Response {
+            request,
+            status: rsp.status(),
         });
 
-        if let Some(handle) = handle.as_ref() {
-            if let Some(taps) = handle.taps.as_ref() {
-                if let Ok(mut taps) = taps.lock() {
-                    taps.inspect(&event::Event::StreamResponseOpen(
-                        handle.meta.clone(),
-                        event::StreamResponseOpen {
-                            request_open_at: handle.request_open_at,
-                            response_open_at,
+        let (head, inner) = rsp.into_parts();
+        let mut body = ResponseBody {
+            inner,
+            meta,
+            taps: self.taps.take(),
+            request_open_at: self.request_open_at,
+            response_open_at,
+            response_first_frame_at: None,
+            byte_count: 0,
+            frame_count: 0,
+        };
+
+        body.tap_open();
+        if body.is_end_stream() {
+            trace!("ResponseFuture::poll: eos");
+            body.tap_eos(Some(&head.headers));
+        }
+
+        let rsp = http::Response::from_parts(head, body);
+        Ok(rsp.into())
+    }
+}
+
+impl<S, B> ResponseFuture<S>
+where
+    B: Body,
+    S: svc::Service<Response = http::Response<B>, Error = Error>,
+{
+    fn tap_err(&mut self, e: Error) -> Error {
+        if let Some(request) = self.meta.take() {
+            let meta = event::Response {
+                request,
+                status: http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+
+            if let Some(t) = self.taps.take() {
+                let now = clock::now();
+                if let Ok(mut taps) = t.lock() {
+                    taps.inspect(&event::Event::StreamResponseFail(
+                        meta,
+                        event::StreamResponseFail {
+                            request_open_at: self.request_open_at,
+                            response_open_at: now,
+                            response_first_frame_at: None,
+                            response_fail_at: now,
+                            error: e.reason().unwrap_or(h2::Reason::INTERNAL_ERROR),
+                            bytes_sent: 0,
                         },
                     ));
                 }
             }
         }
 
-        let rsp = {
-            let (head, inner) = rsp.into_parts();
-            let mut body = ResponseBody {
-                inner,
-                handle,
-                response_open_at,
-                response_first_frame_at: None,
-                byte_count: 0,
-                frame_count: 0,
-            };
-
-            if body.is_end_stream() {
-                trace!("ResponseFuture::poll: eos");
-                body.tap_eos(Some(&head.headers));
-            }
-
-            http::Response::from_parts(head, body)
-        };
-
-        Ok(rsp.into())
+        e
     }
 }
 
@@ -306,7 +302,7 @@ impl<B: Body> Body for RequestBody<B> {
         let poll_frame = self.inner.poll_data().map_err(|e| self.tap_err(e));
         let frame = try_ready!(poll_frame).map(|f| f.into_buf());
 
-        if self.handle.is_some() {
+        if self.meta.is_some() {
             if let Some(ref f) = frame {
                 self.frame_count += 1;
                 self.byte_count += f.remaining();
@@ -328,15 +324,27 @@ impl<B: Body> Body for RequestBody<B> {
 }
 
 impl<B> RequestBody<B> {
+
+    fn tap_open(&mut self) {
+        if let Some(meta) = self.meta.as_ref() {
+            if let Some(taps) = self.taps.as_ref() {
+                if let Ok(mut taps) = taps.lock() {
+                    taps.inspect(&event::Event::StreamRequestOpen(meta.clone()));
+                }
+            }
+        }
+    }
+
     fn tap_eos(&mut self, _: Option<&http::HeaderMap>) {
-        if let Some(mut h) = self.handle.take() {
-            if let Some(t) = h.taps.take() {
+        if let Some(meta) = self.meta.take() {
+            if let Some(t) = self.taps.take() {
+                let now = clock::now();
                 if let Ok(mut taps) = t.lock() {
                     taps.inspect(&event::Event::StreamRequestEnd(
-                        h.meta.clone(),
+                        meta,
                         event::StreamRequestEnd {
-                            request_open_at: h.request_open_at,
-                            request_end_at: clock::now(),
+                            request_open_at: self.request_open_at,
+                            request_end_at: now,
                         },
                     ));
                 }
@@ -345,27 +353,23 @@ impl<B> RequestBody<B> {
     }
 
     fn tap_err(&mut self, e: h2::Error) -> h2::Error {
-        if let Some(mut h) = self.handle.take() {
-            h.tap_err(e.reason())
-        }
-        e
-    }
-}
-
-impl Handle<event::Request> {
-    fn tap_err(&mut self, reason: Option<h2::Reason>) {
-        if let Some(t) = self.taps.take() {
-            if let Ok(mut taps) = t.lock() {
-                taps.inspect(&event::Event::StreamRequestFail(
-                    self.meta.clone(),
-                    event::StreamRequestFail {
-                        request_open_at: self.request_open_at,
-                        request_fail_at: clock::now(),
-                        error: reason.unwrap_or(h2::Reason::INTERNAL_ERROR),
-                    },
-                ));
+        if let Some(meta) = self.meta.take() {
+            if let Some(t) = self.taps.take() {
+                let now = clock::now();
+                if let Ok(mut taps) = t.lock() {
+                    taps.inspect(&event::Event::StreamRequestFail(
+                        meta,
+                        event::StreamRequestFail {
+                            request_open_at: self.request_open_at,
+                            request_fail_at: now,
+                            error: e.reason().unwrap_or(h2::Reason::INTERNAL_ERROR),
+                        },
+                    ));
+                }
             }
         }
+
+        e
     }
 }
 
@@ -380,10 +384,13 @@ impl<B> Drop for RequestBody<B> {
 
 impl<B: Body + Default> Default for ResponseBody<B> {
     fn default() -> Self {
+        let now = clock::now();
         Self {
             inner: B::default(),
-            handle: None,
-            response_open_at: clock::now(),
+            meta: None,
+            taps: None,
+            request_open_at: now,
+            response_open_at: now,
             response_first_frame_at: None,
             byte_count: 0,
             frame_count: 0,
@@ -403,7 +410,7 @@ impl<B: Body> Body for ResponseBody<B> {
         let poll_frame = self.inner.poll_data().map_err(|e| self.tap_err(e));
         let frame = try_ready!(poll_frame).map(|f| f.into_buf());
 
-        if self.handle.is_some() {
+        if self.meta.is_some() {
             if self.response_first_frame_at.is_none() {
                 self.response_first_frame_at = Some(clock::now());
             }
@@ -429,16 +436,33 @@ impl<B: Body> Body for ResponseBody<B> {
 }
 
 impl<B> ResponseBody<B> {
+
+    fn tap_open(&mut self) {
+        if let Some(meta) = self.meta.as_ref() {
+            if let Some(taps) = self.taps.as_ref() {
+                if let Ok(mut taps) = taps.lock() {
+                    taps.inspect(&event::Event::StreamResponseOpen(
+                        meta.clone(),
+                        event::StreamResponseOpen {
+                            request_open_at: self.request_open_at,
+                            response_open_at: clock::now(),
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
     fn tap_eos(&mut self, trailers: Option<&http::HeaderMap>) {
         trace!("ResponseBody::tap_eos: trailers={}", trailers.is_some());
-        if let Some(mut h) = self.handle.take() {
-            if let Some(t) = h.taps.take() {
+        if let Some(meta) = self.meta.take() {
+            if let Some(t) = self.taps.take() {
                 let response_end_at = clock::now();
                 if let Ok(mut taps) = t.lock() {
                     taps.inspect(&event::Event::StreamResponseEnd(
-                        h.meta.clone(),
+                        meta,
                         event::StreamResponseEnd {
-                            request_open_at: h.request_open_at,
+                            request_open_at: self.request_open_at,
                             response_open_at: self.response_open_at,
                             response_first_frame_at: self
                                 .response_first_frame_at
@@ -462,13 +486,13 @@ impl<B> ResponseBody<B> {
     fn tap_err(&mut self, e: h2::Error) -> h2::Error {
         trace!("ResponseBody::tap_err: {:?}", e);
 
-        if let Some(mut h) = self.handle.take() {
-            if let Some(t) = h.taps.take() {
+        if let Some(meta) = self.meta.take() {
+            if let Some(t) = self.taps.take() {
                 if let Ok(mut taps) = t.lock() {
                     taps.inspect(&event::Event::StreamResponseFail(
-                        h.meta.clone(),
+                        meta,
                         event::StreamResponseFail {
-                            request_open_at: h.request_open_at,
+                            request_open_at: self.request_open_at,
                             response_open_at: self.response_open_at,
                             response_first_frame_at: self.response_first_frame_at,
                             response_fail_at: clock::now(),

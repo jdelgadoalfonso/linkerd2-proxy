@@ -104,7 +104,16 @@ impl Stream for TapEvents {
             let poll: Poll<Option<Event>, Self::Error> =
                 self.rx.poll().or_else(|_| Ok(None.into()));
 
-            debug!("polling; current={}; remaining={}", self.current.len(), self.remaining);
+            debug!("polling; remaining={}; current={}", self.remaining, {
+                use std::fmt::Write;
+                let mut s = String::new();
+                write!(s, "[").unwrap();
+                for id in self.current.keys() {
+                    write!(s, "{},", *id).unwrap();
+                }
+                write!(s, "]").unwrap();
+                s
+            });
             match try_ready!(poll) {
                 Some(ev) => {
                     match ev {
