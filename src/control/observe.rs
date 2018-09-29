@@ -97,14 +97,14 @@ impl Stream for TapEvents {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         loop {
             if self.remaining == 0 && self.current.is_empty() {
-                debug!("tap completed");
+                trace!("tap completed");
                 return Ok(None.into());
             }
 
             let poll: Poll<Option<Event>, Self::Error> =
                 self.rx.poll().or_else(|_| Ok(None.into()));
 
-            debug!("polling; remaining={}; current={}", self.remaining, {
+            trace!("polling; remaining={}; current={}", self.remaining, {
                 use std::fmt::Write;
                 let mut s = String::new();
                 write!(s, "[").unwrap();
@@ -119,22 +119,22 @@ impl Stream for TapEvents {
                     match ev {
                         Event::StreamRequestOpen(ref req) => {
                             if self.remaining == 0 {
-                                debug!("exhausted; ignoring req={}", req.id);
+                                trace!("exhausted; ignoring req={}", req.id);
                                 continue;
                             }
-                            debug!("insert req={}", req.id);
+                            trace!("insert req={}", req.id);
                             self.remaining -= 1;
                             let _ = self.current.insert(req.id, req.clone());
                         }
                         Event::StreamRequestFail(ref req, _) => {
-                            debug!("fail req={}", req.id);
+                            trace!("fail req={}", req.id);
                             if self.current.remove(&req.id).is_none() {
                                 warn!("did not exist req={}", req.id);
                                 continue;
                             }
                         }
                         Event::StreamResponseOpen(ref rsp, _) => {
-                            debug!("response req={}", rsp.request.id);
+                            trace!("response req={}", rsp.request.id);
                             if !self.current.contains_key(&rsp.request.id) {
                                 warn!("did not exist req={}", rsp.request.id);
                                 continue;
@@ -142,7 +142,7 @@ impl Stream for TapEvents {
                         }
                         Event::StreamResponseFail(ref rsp, _) |
                         Event::StreamResponseEnd(ref rsp, _) => {
-                            debug!("end req={}", rsp.request.id);
+                            trace!("end req={}", rsp.request.id);
                             if self.current.remove(&rsp.request.id).is_none() {
                                 warn!("did not exist req={}", rsp.request.id);
                                 continue;
@@ -154,9 +154,9 @@ impl Stream for TapEvents {
                         }
                     }
 
-                    debug!("emitting tap event: {:?}", ev);
+                    trace!("emitting tap event: {:?}", ev);
                     if let Ok(te) = TapEvent::try_from(&ev) {
-                        debug!("emitted tap event");
+                        trace!("emitted tap event");
                         // TODO Do limit checks here.
                         return Ok(Some(te).into());
                     }
