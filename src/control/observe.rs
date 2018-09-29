@@ -118,13 +118,14 @@ impl Stream for TapEvents {
                             let _ = self.current.insert(req.id, req.clone());
                         }
                         Event::StreamRequestFail(ref req, _) => {
-                            debug!("remove req={}", req.id);
+                            debug!("fail req={}", req.id);
                             if self.current.remove(&req.id).is_none() {
                                 warn!("did not exist req={}", req.id);
                                 continue;
                             }
                         }
                         Event::StreamResponseOpen(ref rsp, _) => {
+                            debug!("response req={}", rsp.request.id);
                             if !self.current.contains_key(&rsp.request.id) {
                                 warn!("did not exist req={}", rsp.request.id);
                                 continue;
@@ -132,6 +133,7 @@ impl Stream for TapEvents {
                         }
                         Event::StreamResponseFail(ref rsp, _) |
                         Event::StreamResponseEnd(ref rsp, _) => {
+                            debug!("end req={}", rsp.request.id);
                             if self.current.remove(&rsp.request.id).is_none() {
                                 warn!("did not exist req={}", rsp.request.id);
                                 continue;
