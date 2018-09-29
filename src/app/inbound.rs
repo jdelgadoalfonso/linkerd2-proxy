@@ -40,13 +40,16 @@ impl<A> router::Recognize<http::Request<A>> for Recognize {
             .map(|s| s.tls_status.clone())
             .unwrap_or_else(|| Conditional::None(tls::ReasonForNoTls::Disabled));
 
+        error!("recognize; src={:?}, authority={:?}", src, req.uri().authority_part());
         let addr = src
             .and_then(|s| s.orig_dst_if_not_local())
             .or(self.default_addr)?;
 
         let authority = req.uri().authority_part().cloned().or_else(|| {
             let a = format!("{}", addr);
-            http::uri::Authority::from_shared(a.into()).ok()
+            http::uri::Authority::from_shared(a.into())
+                .map_err(|e| error!("could not use {} as authority: {}", addr, e))
+                .ok()
         })?;
         let settings = Settings::detect(req);
 

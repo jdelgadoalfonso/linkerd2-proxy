@@ -174,6 +174,12 @@ const ENV_INBOUND_CONNECT_TIMEOUT: &str = "LINKERD2_PROXY_INBOUND_CONNECT_TIMEOU
 const ENV_OUTBOUND_CONNECT_TIMEOUT: &str = "LINKERD2_PROXY_OUTBOUND_CONNECT_TIMEOUT";
 pub const ENV_BIND_TIMEOUT: &str = "LINKERD2_PROXY_BIND_TIMEOUT";
 
+pub const DEPRECATED_ENV_PRIVATE_LISTENER: &str = "LINKERD2_PROXY_PRIVATE_LISTENER";
+pub const DEPRECATED_ENV_PRIVATE_FORWARD: &str = "LINKERD2_PROXY_PRIVATE_FORWARD";
+const DEPRECATED_ENV_PUBLIC_LISTENER: &str = "LINKERD2_PROXY_PUBLIC_LISTENER";
+const DEPRECATED_ENV_PRIVATE_CONNECT_TIMEOUT: &str = "LINKERD2_PROXY_PRIVATE_CONNECT_TIMEOUT";
+const DEPRECATED_ENV_PUBLIC_CONNECT_TIMEOUT: &str = "LINKERD2_PROXY_PUBLIC_CONNECT_TIMEOUT";
+
 // Limits the number of HTTP routes that may be active in the proxy at any time. There is
 // an inbound route for each local port that receives connections. There is an outbound
 // route for each protocol and authority.
@@ -273,13 +279,33 @@ impl<'a> TryFrom<&'a Strings> for Config {
         // Parse all the environment variables. `env_var` and `env_var_parse`
         // will log any errors so defer returning any errors until all of them
         // have been parsed.
-        let outbound_listener_addr = parse(strings, ENV_OUTBOUND_LISTENER, str::parse);
-        let inbound_listener_addr = parse(strings, ENV_INBOUND_LISTENER, str::parse);
+        let outbound_listener_addr = parse(strings, ENV_OUTBOUND_LISTENER, str::parse)
+            .and_then(|a| match a {
+                Some(a) => Ok(Some(a)),
+                None => parse(strings, DEPRECATED_ENV_PRIVATE_LISTENER, str::parse),
+            });
+        let inbound_listener_addr = parse(strings, ENV_INBOUND_LISTENER, str::parse)
+            .and_then(|a| match a {
+                Some(a) => Ok(Some(a)),
+                None => parse(strings, DEPRECATED_ENV_PUBLIC_LISTENER, str::parse),
+            });
         let control_listener_addr = parse(strings, ENV_CONTROL_LISTENER, str::parse);
         let metrics_listener_addr = parse(strings, ENV_METRICS_LISTENER, str::parse);
-        let inbound_forward = parse(strings, ENV_INBOUND_FORWARD, str::parse);
-        let inbound_connect_timeout = parse(strings, ENV_INBOUND_CONNECT_TIMEOUT, parse_duration);
-        let outbound_connect_timeout = parse(strings, ENV_OUTBOUND_CONNECT_TIMEOUT, parse_duration);
+        let inbound_forward = parse(strings, ENV_INBOUND_FORWARD, str::parse)
+            .and_then(|a| match a {
+                Some(a) => Ok(Some(a)),
+                None => parse(strings, DEPRECATED_ENV_PRIVATE_FORWARD, str::parse),
+            });
+        let inbound_connect_timeout = parse(strings, ENV_INBOUND_CONNECT_TIMEOUT, parse_duration)
+            .and_then(|a| match a {
+                Some(a) => Ok(Some(a)),
+                None => parse(strings, DEPRECATED_ENV_PRIVATE_CONNECT_TIMEOUT, parse_duration),
+            });
+        let outbound_connect_timeout = parse(strings, ENV_OUTBOUND_CONNECT_TIMEOUT, parse_duration)
+            .and_then(|a| match a {
+                Some(a) => Ok(Some(a)),
+                None => parse(strings, DEPRECATED_ENV_PUBLIC_CONNECT_TIMEOUT, parse_duration),
+            });
         let inbound_disable_ports = parse(strings, ENV_INBOUND_PORTS_DISABLE_PROTOCOL_DETECTION, parse_port_set);
         let outbound_disable_ports = parse(strings, ENV_OUTBOUND_PORTS_DISABLE_PROTOCOL_DETECTION, parse_port_set);
         let inbound_router_capacity = parse(strings, ENV_INBOUND_ROUTER_CAPACITY, parse_number);
