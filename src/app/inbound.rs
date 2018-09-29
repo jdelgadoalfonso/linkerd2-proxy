@@ -160,7 +160,7 @@ mod tests {
             is_h1_upgrade: false,
             was_absolute_form: false,
         };
-        let authority = http::uri::Authority::from_shared(format!("{}", addr).into());
+        let authority = http::uri::Authority::from_shared(format!("{}", addr).into()).unwrap();
         let source_tls_status = TLS_DISABLED;
         Endpoint {
             addr,
