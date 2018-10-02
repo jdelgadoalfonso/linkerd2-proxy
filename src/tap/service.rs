@@ -9,7 +9,10 @@ use tokio_timer::clock;
 use tower_h2::Body;
 
 use super::{event, NextId, Taps};
-use proxy::{self, http::client::Error};
+use proxy::{
+    self,
+    http::{client::Error, h1},
+};
 use svc;
 
 /// A stack module that wraps services to record taps.
@@ -179,16 +182,20 @@ where
         let request_open_at = clock::now();
 
         // Only tap a request iff a `Source` is known.
-        let meta = req
-            .extensions()
-            .get::<proxy::Source>()
-            .map(|source| event::Request {
+        let meta = req.extensions().get::<proxy::Source>().map(|source| {
+            let mut uri = req.uri().clone().into_parts();
+            if uri.authority.is_none() {
+                uri.authority = h1::authority_from_host(&req);
+            }
+
+            event::Request {
                 id: self.next_id.next_id(),
                 endpoint: self.endpoint.clone(),
                 source: source.clone(),
                 method: req.method().clone(),
-                uri: req.uri().clone(),
-            });
+                uri: http::Uri::from_parts(uri).expect("URI must be valid"),
+            }
+        });
 
         let (head, inner) = req.into_parts();
         let mut body = RequestBody {
@@ -324,7 +331,6 @@ impl<B: Body> Body for RequestBody<B> {
 }
 
 impl<B> RequestBody<B> {
-
     fn tap_open(&mut self) {
         if let Some(meta) = self.meta.as_ref() {
             if let Some(taps) = self.taps.as_ref() {
@@ -436,7 +442,6 @@ impl<B: Body> Body for ResponseBody<B> {
 }
 
 impl<B> ResponseBody<B> {
-
     fn tap_open(&mut self) {
         if let Some(meta) = self.meta.as_ref() {
             if let Some(taps) = self.taps.as_ref() {

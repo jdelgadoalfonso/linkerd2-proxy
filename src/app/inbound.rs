@@ -3,7 +3,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 
-use proxy::http::{client, orig_proto, router, Settings};
+use proxy::http::{client, h1, orig_proto, router, Settings};
 use proxy::server::Source;
 use svc;
 use tap;
@@ -44,10 +44,12 @@ impl<A> router::Recognize<http::Request<A>> for Recognize {
             .and_then(|s| s.orig_dst_if_not_local())
             .or(self.default_addr)?;
 
-        let authority = req.uri().authority_part().cloned().or_else(|| {
-            let a = format!("{}", addr);
-            http::uri::Authority::from_shared(a.into()).ok()
-        })?;
+        let authority = req.uri().authority_part().cloned()
+            .or_else(|| h1::authority_from_host(req))
+            .or_else(|| {
+                let a = format!("{}", addr);
+                http::uri::Authority::from_shared(a.into()).ok()
+            })?;
         let settings = Settings::detect(req);
 
         let ep = Endpoint {
