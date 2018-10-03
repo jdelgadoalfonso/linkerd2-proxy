@@ -22,7 +22,9 @@ pub struct Request {
     pub source: Source,
     pub endpoint: Endpoint,
     pub method: http::Method,
-    pub uri: http::Uri,
+    pub scheme: Option<http::uri::Scheme>,
+    pub authority: Option<http::uri::Authority>,
+    pub path: String,
 }
 
 #[derive(Clone, Debug)]

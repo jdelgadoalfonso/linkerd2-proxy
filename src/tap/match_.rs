@@ -309,19 +309,17 @@ impl<'a> TryFrom<&'a observe_request::match_::tcp::Netmask> for NetMatch {
 impl HttpMatch {
     fn matches(&self, req: &event::Request) -> bool {
         match *self {
-            HttpMatch::Scheme(ref m) => req.uri
-                .scheme_part()
+            HttpMatch::Scheme(ref m) => req.scheme.as_ref()
                 .map(|s| m == s.as_ref())
                 .unwrap_or(false),
 
             HttpMatch::Method(ref m) => *m == req.method,
 
-            HttpMatch::Authority(ref m) => req.uri
-                .authority_part()
+            HttpMatch::Authority(ref m) => req.authority.as_ref()
                 .map(|a| Self::matches_string(m, a.as_str()))
                 .unwrap_or(false),
 
-            HttpMatch::Path(ref m) => Self::matches_string(m, req.uri.path()),
+            HttpMatch::Path(ref m) => Self::matches_string(m, &req.path),
         }
     }
 

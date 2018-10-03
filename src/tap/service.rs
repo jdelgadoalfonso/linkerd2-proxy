@@ -183,17 +183,20 @@ where
 
         // Only tap a request iff a `Source` is known.
         let meta = req.extensions().get::<proxy::Source>().map(|source| {
-            let mut uri = req.uri().clone().into_parts();
-            if uri.authority.is_none() {
-                uri.authority = h1::authority_from_host(&req);
-            }
+            let scheme = req.uri().scheme_part().cloned();
+            let authority = req.uri().authority_part()
+                .cloned()
+                .or_else(|| h1::authority_from_host(&req));
+            let path = req.uri().path().into();
 
             event::Request {
                 id: self.next_id.next_id(),
                 endpoint: self.endpoint.clone(),
                 source: source.clone(),
                 method: req.method().clone(),
-                uri: http::Uri::from_parts(uri).expect("URI must be valid"),
+                scheme,
+                authority,
+                path,
             }
         });
 
