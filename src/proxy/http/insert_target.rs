@@ -4,17 +4,23 @@ use std::marker::PhantomData;
 
 use svc;
 
+/// Wraps HTTP `Service` `Stack<T>`s so that `T` is cloned into each request's
+/// extensions.
 #[derive(Debug)]
 pub struct Layer<T, M>(PhantomData<fn() -> (T, M)>);
 
+/// Wraps an HTTP `Service` so that the Stack's `T -typed target` is cloned into
+/// each request's extensions.
 #[derive(Clone, Debug)]
-pub struct Stack<M>(M);
+pub struct Stack<T, M>(M, PhantomData<fn() -> T>);
 
 #[derive(Clone, Debug)]
 pub struct Service<T, S> {
     target: T,
     inner: S,
 }
+
+// === impl Layer ===
 
 impl<T, M> Layer<T, M> {
     pub fn new() -> Self {
@@ -34,16 +40,18 @@ where
     M: svc::Stack<T>,
     M::Value: svc::Service<Request = http::Request<B>>,
 {
-    type Value = <Stack<M> as svc::Stack<T>>::Value;
-    type Error = <Stack<M> as svc::Stack<T>>::Error;
-    type Stack = Stack<M>;
+    type Value = <Stack<T, M> as svc::Stack<T>>::Value;
+    type Error = <Stack<T, M> as svc::Stack<T>>::Error;
+    type Stack = Stack<T, M>;
 
     fn bind(&self, next: M) -> Self::Stack {
-        Stack(next)
+        Stack(next, PhantomData)
     }
 }
 
-impl<T, M, B> svc::Stack<T> for Stack<M>
+// === impl Stack ===
+
+impl<T, M, B> svc::Stack<T> for Stack<T, M>
 where
     T: Clone + Send + Sync + 'static,
     M: svc::Stack<T>,
@@ -58,6 +66,8 @@ where
         Ok(Service { inner, target })
     }
 }
+
+// === impl Service ===
 
 impl<T, S, B> svc::Service for Service<T, S>
 where

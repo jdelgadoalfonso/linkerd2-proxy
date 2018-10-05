@@ -16,15 +16,17 @@ use svc;
 use task::BoxExecutor;
 use transport::connect;
 
-type HyperClient<C, B> =
-    hyper::Client<HyperConnect<C>, BodyPayload<B>>;
-
+/// Configurs an HTTP Client `Service` `Stack`.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub target: connect::Target,
     pub settings: Settings,
+    _p: (),
 }
 
+/// Configurs an HTTP client that uses a `C`-typed connector
+///
+/// The `proxy_name` is used for diagnostics (logging, mostly).
 #[derive(Debug)]
 pub struct Stack<T, C, B>
 where
@@ -50,6 +52,9 @@ pub enum Error {
     Http1(hyper::Error),
     Http2(tower_h2::client::Error),
 }
+
+type HyperClient<C, B> =
+    hyper::Client<HyperConnect<C>, BodyPayload<B>>;
 
 /// A `NewService` that can speak either HTTP/1 or HTTP/2.
 pub struct Client<C, E, B>
@@ -121,11 +126,24 @@ where
     >),
 }
 
+pub enum ClientServiceFuture {
+    Http1 {
+        future: hyper::client::ResponseFuture,
+        upgrade: Option<Http11Upgrade>,
+        is_http_connect: bool,
+    },
+    Http2(tower_h2::client::ResponseFuture),
+}
+
+// === impl Config ===
+
 impl Config {
     pub fn new(target: connect::Target, settings: Settings) -> Self {
         Config { target, settings }
     }
 }
+
+// === impl Stack ===
 
 impl<T, C, B> Stack<T, C, B>
 where
@@ -183,6 +201,8 @@ where
         Ok(Reconnect::new(config.clone(), client))
     }
 }
+
+// === impl Client ===
 
 impl<C, E, B> Client<C, E, B>
 where
@@ -257,6 +277,8 @@ where
     }
 }
 
+// === impl ClientNewServiceFuture ===
+
 impl<C, E, B> Future for ClientNewServiceFuture<C, E, B>
 where
     C: connect::Connect + Send + 'static,
@@ -285,6 +307,8 @@ where
         }))
     }
 }
+
+// === impl ClientService ===
 
 impl<C, E, B> svc::Service for ClientService<C, E, B>
 where
@@ -334,14 +358,7 @@ where
     }
 }
 
-pub enum ClientServiceFuture {
-    Http1 {
-        future: hyper::client::ResponseFuture,
-        upgrade: Option<Http11Upgrade>,
-        is_http_connect: bool,
-    },
-    Http2(tower_h2::client::ResponseFuture),
-}
+// === impl ClietnServiceFuture ===
 
 impl Future for ClientServiceFuture {
     type Item = http::Response<HttpBody>;
@@ -379,6 +396,8 @@ impl Future for ClientServiceFuture {
         }
     }
 }
+
+// === impl Error ===
 
 impl From<tower_h2::client::Error> for Error {
     fn from(e: tower_h2::client::Error) -> Self {
